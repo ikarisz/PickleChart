@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #080a0f;
+  color: #f1f5f9;
+  font-family: 'Tahoma', 'Segoe UI', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* Classic Windows XP Win32 Scrollbars */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: #ece9d8;
+  border-left: 1px solid #aca899;
+  box-shadow: inset 1px 0 0 #ffffff;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ece9d8;
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-right: 1px solid #707070;
+  border-bottom: 1px solid #707070;
+  border-radius: 0;
+  box-shadow: inset -1px -1px 0 #aca899;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #dfdbcc;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #c8c4b4;
+  border-top: 1px solid #707070;
+  border-left: 1px solid #707070;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+}
