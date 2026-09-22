@@ -381,6 +381,7 @@ export function App() {
             bollinger: settings.indicators.bollinger.enabled,
           }}
           onResetView={handleResetView}
+          onSelectSymbol={handleSelectSymbol}
         />
 
         {/* PickleChart Terminal Header */}

@@ -52,7 +52,7 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   const [isAssetDropdownOpen, setIsAssetDropdownOpen] = React.useState(false);
 
   return (
-    <div className="h-10 bg-[#ece9d8] border-b border-[#aca899] px-2 flex items-center justify-between gap-1 select-none text-slate-900 font-sans shadow-sm overflow-x-auto text-xs shrink-0 z-20">
+    <div className="h-10 bg-[#ece9d8] border-b border-[#aca899] px-2 flex items-center justify-between gap-1 select-none text-slate-900 font-sans shadow-sm text-xs shrink-0 relative z-30">
       {/* 1. Left Band: Rebar Grip + Asset Selector + Digital Price Readout */}
       <div className="flex items-center gap-1.5 shrink-0">
         {/* Rebar Gripper */}
@@ -66,7 +66,7 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         <div className="relative">
           <button
             onClick={() => setIsAssetDropdownOpen(!isAssetDropdownOpen)}
-            className="flex items-center gap-1.5 bg-white border border-[#7f9db9] rounded-[2px] px-2 py-0.5 text-xs text-slate-900 shadow-[inset_1px_1px_1px_rgba(0,0,0,0.15)] hover:border-[#316ac5]"
+            className="flex items-center gap-1.5 bg-white border border-[#7f9db9] rounded-[2px] px-2 py-0.5 text-xs text-slate-900 shadow-[inset_1px_1px_1px_rgba(0,0,0,0.15)] hover:border-[#316ac5] cursor-pointer"
             title="Select Market Asset"
           >
             <span className="font-bold text-[#0055ea] font-mono text-xs">{symbol}</span>
@@ -78,32 +78,43 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
 
           {/* XP Dropdown Popover */}
           {isAssetDropdownOpen && (
-            <div className="absolute top-full left-0 mt-0.5 w-60 bg-[#ece9d8] border-2 border-[#0055ea] rounded-sm shadow-2xl p-1 z-50 text-slate-900">
-              <div className="text-[10px] font-bold text-slate-700 px-2 py-1 uppercase bg-[#d8d4c4] border-b border-[#aca899] mb-1">
-                Select Market Asset
+            <>
+              {/* Click-outside backdrop to dismiss */}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setIsAssetDropdownOpen(false)}
+              />
+              <div className="absolute top-full left-0 mt-1 w-64 bg-[#ece9d8] border-2 border-[#0055ea] rounded-sm shadow-2xl p-1 z-50 text-slate-900 font-sans">
+                <div className="text-[10px] font-bold text-slate-700 px-2 py-1 uppercase bg-[#d8d4c4] border-b border-[#aca899] mb-1 flex items-center justify-between">
+                  <span>Select Market Asset</span>
+                  <span className="text-[9px] text-slate-500 font-mono font-normal">4 Available</span>
+                </div>
+                {(Object.keys(ASSET_MAP) as MarketSymbol[]).map((sym) => {
+                  const a = ASSET_MAP[sym];
+                  const isAct = sym === symbol;
+                  return (
+                    <button
+                      key={sym}
+                      onClick={() => {
+                        onSelectSymbol(sym);
+                        setIsAssetDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-[1px] text-left text-xs transition-colors my-0.5 cursor-pointer ${
+                        isAct
+                          ? 'bg-[#316ac5] text-white font-bold shadow-sm'
+                          : 'hover:bg-[#316ac5] hover:text-white text-slate-900'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${isAct ? 'bg-white' : 'bg-[#0055ea]'}`} />
+                        <span className="font-mono font-bold">{a.symbol}</span>
+                      </div>
+                      <span className={`text-[10px] ${isAct ? 'text-white/90' : 'text-slate-600'}`}>{a.name}</span>
+                    </button>
+                  );
+                })}
               </div>
-              {(Object.keys(ASSET_MAP) as MarketSymbol[]).map((sym) => {
-                const a = ASSET_MAP[sym];
-                const isAct = sym === symbol;
-                return (
-                  <button
-                    key={sym}
-                    onClick={() => {
-                      onSelectSymbol(sym);
-                      setIsAssetDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-2 py-1 rounded-[1px] text-left text-xs transition-colors ${
-                      isAct
-                        ? 'bg-[#316ac5] text-white font-bold'
-                        : 'hover:bg-[#316ac5] hover:text-white text-slate-900'
-                    }`}
-                  >
-                    <span className="font-mono font-bold">{a.symbol}</span>
-                    <span className="text-[10px] opacity-80">{a.name}</span>
-                  </button>
-                );
-              })}
-            </div>
+            </>
           )}
         </div>
 

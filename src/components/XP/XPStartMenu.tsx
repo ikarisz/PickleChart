@@ -15,6 +15,7 @@ interface XPStartMenuProps {
   onResetView: () => void;
   presets: ChartPreset[];
   onApplyPreset: (p: ChartPreset) => void;
+  onOpenLandingPage?: () => void;
 }
 
 export const XPStartMenu: React.FC<XPStartMenuProps> = ({
@@ -24,6 +25,7 @@ export const XPStartMenu: React.FC<XPStartMenuProps> = ({
   onResetView,
   presets,
   onApplyPreset,
+  onOpenLandingPage,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -75,6 +77,19 @@ export const XPStartMenu: React.FC<XPStartMenuProps> = ({
             <div className="flex bg-white min-h-64">
               {/* Left Column (White Background: Quick Apps) */}
               <div className="w-44 p-2 space-y-1 border-r border-[#aca899] bg-white">
+                {onOpenLandingPage && (
+                  <button
+                    onClick={() => {
+                      onOpenLandingPage();
+                      setIsOpen(false);
+                    }}
+                    className="w-full text-left p-1.5 hover:bg-[#316ac5] hover:text-white rounded flex items-center gap-2 font-medium text-emerald-800"
+                  >
+                    <span>🥒</span>
+                    <span>Welcome / Showcase</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => {
                     onOpenSettings();
