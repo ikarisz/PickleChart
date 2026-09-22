@@ -4,6 +4,12 @@
 
 ### *The High-Performance, Windows XP Edition Order Flow & Liquidity Trading Terminal*
 
+<p align="center">
+  <a href="https://www.toryod.co/projects/173ef2d4-7369-41e0-be4c-30719920b7ad-picklechart" target="_blank" rel="noopener">
+    <img src="https://www.toryod.co/badge/173ef2d4-7369-41e0-be4c-30719920b7ad" alt="Featured on TorYod" height="54" />
+  </a>
+</p>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61DAFB?logo=react)](https://reactjs.org/)
