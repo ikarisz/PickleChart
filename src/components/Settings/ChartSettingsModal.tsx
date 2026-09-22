@@ -380,7 +380,7 @@ export const ChartSettingsModal: React.FC<ChartSettingsModalProps> = ({
                       value={localSettings.watermarkText}
                       onChange={(e) => setLocalSettings((p) => ({ ...p, watermarkText: e.target.value }))}
                       className="flex-1 px-2 py-1 border rounded text-xs"
-                      placeholder="e.g. TRADING DESK"
+                      placeholder="e.g. PickleChart"
                     />
                     <span className="text-[11px] text-slate-500">Opacity:</span>
                     <input

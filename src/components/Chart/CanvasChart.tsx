@@ -344,13 +344,18 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         const { timeToX, priceToY, chartW, chartH } = transforms;
 
         // Custom Watermark
-        if (settings.showWatermark && settings.watermarkText) {
+        if (settings.showWatermark) {
+          const rawWatermark = settings.watermarkText;
+          const displayWatermark = (!rawWatermark || rawWatermark === 'ANTIGRAVITY PRO MAX' || rawWatermark === 'PICKLECHART')
+            ? 'PickleChart'
+            : rawWatermark;
+
           ctx.save();
-          ctx.font = '900 42px "JetBrains Mono", sans-serif';
+          ctx.font = '900 44px "JetBrains Mono", sans-serif';
           ctx.fillStyle = `rgba(255, 255, 255, ${settings.watermarkOpacity || 0.08})`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(settings.watermarkText, chartW / 2, chartH / 2);
+          ctx.fillText(displayWatermark, chartW / 2, chartH / 2);
           ctx.restore();
         }
 

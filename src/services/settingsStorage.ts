@@ -22,7 +22,7 @@ export const DEFAULT_SETTINGS: ChartAppearanceSettings = {
   gridColor: '#1f293d',
   gridOpacity: 0.6,
   showWatermark: true,
-  watermarkText: 'PICKLECHART',
+  watermarkText: 'PickleChart',
   watermarkOpacity: 0.08,
   xpTheme: 'luna_blue',
   indicators: {
@@ -113,6 +113,13 @@ export class SettingsStorage {
       const raw = localStorage.getItem(STORAGE_KEY_SETTINGS);
       if (!raw) return { ...DEFAULT_SETTINGS };
       const parsed = JSON.parse(raw);
+      if (
+        !parsed.watermarkText ||
+        parsed.watermarkText === 'ANTIGRAVITY PRO MAX' ||
+        parsed.watermarkText === 'PICKLECHART'
+      ) {
+        parsed.watermarkText = 'PickleChart';
+      }
       return {
         ...DEFAULT_SETTINGS,
         ...parsed,
