@@ -17,6 +17,7 @@ export interface IndicatorSettings {
   vwap: IndicatorConfig;
   bollinger: IndicatorConfig;
   volumeProfile: IndicatorConfig; // visible-range volume profile (POC / VAH / VAL)
+  cvd: IndicatorConfig; // cumulative volume delta sub-pane
 }
 
 export interface ChartAppearanceSettings {

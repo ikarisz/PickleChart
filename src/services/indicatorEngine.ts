@@ -66,6 +66,31 @@ export class IndicatorEngine {
   }
 
   /**
+   * Cumulative Volume Delta (running sum of buy − sell aggressor volume per candle).
+   * Candles without taker split fall back to a close-vs-open estimate (60/40), flagged as estimated.
+   */
+  public static calculateCVD(candles: Candle[]): Array<IndicatorPoint & { delta: number; estimated: boolean }> {
+    const result: Array<IndicatorPoint & { delta: number; estimated: boolean }> = [];
+    let cum = 0;
+    for (const c of candles) {
+      const buy = c.buyVolume ?? 0;
+      const sell = c.sellVolume ?? 0;
+      let delta: number;
+      let estimated = false;
+      if (buy + sell > 0) {
+        delta = buy - sell;
+      } else {
+        const vol = c.volume || 0;
+        delta = c.close > c.open ? vol * 0.2 : c.close < c.open ? -vol * 0.2 : 0;
+        estimated = vol > 0;
+      }
+      cum += delta;
+      result.push({ time: c.time, value: cum, delta, estimated });
+    }
+    return result;
+  }
+
+  /**
    * Bollinger Bands (SMA 20, 2 StdDev)
    */
   public static calculateBollingerBands(

@@ -364,7 +364,7 @@ export function App() {
     setPresets(SettingsStorage.loadPresets());
   };
 
-  const handleQuickToggleIndicator = (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile') => {
+  const handleQuickToggleIndicator = (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile' | 'cvd') => {
     const next: ChartAppearanceSettings = {
       ...settings,
       indicators: {
@@ -430,6 +430,7 @@ export function App() {
             vwap: settings.indicators.vwap.enabled,
             bollinger: settings.indicators.bollinger.enabled,
             volumeProfile: settings.indicators.volumeProfile.enabled,
+            cvd: settings.indicators.cvd.enabled,
           }}
           onResetView={handleResetView}
           onSelectSymbol={handleSelectSymbol}

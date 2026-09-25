@@ -58,12 +58,15 @@
 - **Order Block / Box (`B`)**: Mark fair value gaps, liquidity blocks, and supply/demand zones with customizable fill opacity.
 - **Fibonacci Retracements (`F`)**: Golden ratio retracements (0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%).
 - **Text Callout (`N`)**: Annotate key setups and breakout levels.
+- **Fixed Range Volume Profile (`P`)**: Drag across any time range to get its own volume profile with POC, VAH/VAL (70% value area), total volume and net delta.
 - **Undo (`Ctrl+Z`) & Delete (`Del` / `Backspace`)**: Low-friction drawing workflow.
 
 ### 5. 📈 Real-Time Technical Indicators
 - **Exponential Moving Averages**: EMA 9, EMA 21, EMA 50, and EMA 200 with customizable colors and line weights.
 - **Session VWAP**: Volume-Weighted Average Price benchmark with dashed styling.
 - **Bollinger Bands**: 20-period SMA with 2-standard-deviation bands and translucent channel fill.
+- **Visible Range Volume Profile**: Live POC / VAH / VAL for whatever is on screen, built from real ticks with candle-estimated fallback.
+- **Cumulative Volume Delta (CVD)**: Sub-pane with the running buy − sell aggressor delta and per-candle delta bars (uses Binance taker-buy volume for historical candles).
 
 ### 6. 💾 100% Local-First & Customization
 - **No Account Required**: Runs entirely in the client. All settings, drawing coordinates, and presets are saved to browser `localStorage`.
@@ -120,6 +123,7 @@ npm run preview
 | <kbd>B</kbd> | **Order Block / Box** | Draw liquidity zones and FVG boxes |
 | <kbd>F</kbd> | **Fibonacci** | Draw multi-level Fibonacci retracements |
 | <kbd>N</kbd> | **Text Note** | Add a callout or trade note at click position |
+| <kbd>P</kbd> | **Fixed Range Volume Profile** | Drag across a time range to profile it (POC / VAH / VAL) |
 | <kbd>M</kbd> | **Range Ruler** | Toggle interactive liquidity measurement box |
 | <kbd>Ctrl</kbd> + <kbd>Z</kbd> | **Undo** | Remove the most recently placed drawing |
 | <kbd>Del</kbd> / <kbd>Backspace</kbd> | **Delete** | Delete the currently selected drawing |

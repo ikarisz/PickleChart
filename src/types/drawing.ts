@@ -5,11 +5,12 @@ export type DrawingToolType =
   | 'box'
   | 'fibonacci'
   | 'text'
+  | 'fixed_range_vp'
   | 'measure';
 
 export interface DrawingItem {
   id: string;
-  type: 'trendline' | 'horizontal_ray' | 'box' | 'fibonacci' | 'text';
+  type: 'trendline' | 'horizontal_ray' | 'box' | 'fibonacci' | 'text' | 'fixed_range_vp';
   price1: number;
   time1: number; // in Unix seconds
   price2?: number;

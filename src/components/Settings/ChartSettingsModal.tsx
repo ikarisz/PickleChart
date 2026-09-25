@@ -768,6 +768,39 @@ export const ChartSettingsModal: React.FC<ChartSettingsModalProps> = ({
                     className="w-7 h-6 rounded cursor-pointer border"
                   />
                 </div>
+                              {/* Cumulative Volume Delta */}
+                <div className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded border">
+                  <label className="flex items-center gap-2 cursor-pointer font-medium">
+                    <input
+                      type="checkbox"
+                      checked={localSettings.indicators.cvd.enabled}
+                      onChange={(e) =>
+                        setLocalSettings((p) => ({
+                          ...p,
+                          indicators: {
+                            ...p.indicators,
+                            cvd: { ...p.indicators.cvd, enabled: e.target.checked },
+                          },
+                        }))
+                      }
+                    />
+                    <span>Cumulative Volume Delta (CVD sub-pane)</span>
+                  </label>
+                  <input
+                    type="color"
+                    value={localSettings.indicators.cvd.color}
+                    onChange={(e) =>
+                      setLocalSettings((p) => ({
+                        ...p,
+                        indicators: {
+                          ...p.indicators,
+                          cvd: { ...p.indicators.cvd, color: e.target.value },
+                        },
+                      }))
+                    }
+                    className="w-7 h-6 rounded cursor-pointer border"
+                  />
+                </div>
               </fieldset>
             </div>
           )}

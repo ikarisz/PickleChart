@@ -11,6 +11,7 @@ import {
   Undo2,
   Trash2,
   Palette,
+  BarChart3,
 } from 'lucide-react';
 
 interface DrawingToolbarProps {
@@ -61,6 +62,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
     { type: 'box', label: 'Order Block / Box', shortcut: 'B', icon: <Square className="w-3.5 h-3.5" /> },
     { type: 'fibonacci', label: 'Fibonacci Retracement', shortcut: 'F', icon: <Percent className="w-3.5 h-3.5" /> },
     { type: 'text', label: 'Text Note', shortcut: 'N', icon: <Type className="w-3.5 h-3.5" /> },
+    { type: 'fixed_range_vp', label: 'Fixed Range Volume Profile', shortcut: 'P', icon: <BarChart3 className="w-3.5 h-3.5 -rotate-90" /> },
     { type: 'measure', label: 'Range Ruler', shortcut: 'M', icon: <Ruler className="w-3.5 h-3.5" /> },
   ];
 

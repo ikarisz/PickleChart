@@ -14,7 +14,7 @@ interface XPTitleBarProps {
   xpTheme: XPThemeStyle;
   onOpenSettings: () => void;
   onSelectDrawingTool: (tool: DrawingToolType) => void;
-  onQuickToggleIndicator: (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile') => void;
+  onQuickToggleIndicator: (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile' | 'cvd') => void;
   activeIndicators: {
     ema9: boolean;
     ema21: boolean;
@@ -23,6 +23,7 @@ interface XPTitleBarProps {
     vwap: boolean;
     bollinger: boolean;
     volumeProfile: boolean;
+    cvd: boolean;
   };
   onResetView: () => void;
   onOpenLandingPage?: () => void;
@@ -273,6 +274,13 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
                 <span>Volume Profile (Visible Range)</span>
                 <span>{activeIndicators.volumeProfile ? '✓' : ''}</span>
               </button>
+              <button
+                onClick={() => onQuickToggleIndicator('cvd')}
+                className="w-full text-left px-2 py-1 hover:bg-[#316ac5] hover:text-white rounded-sm flex items-center justify-between"
+              >
+                <span>Cumulative Volume Delta (CVD)</span>
+                <span>{activeIndicators.cvd ? '✓' : ''}</span>
+              </button>
             </div>
           )}
         </div>
@@ -322,6 +330,15 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
                 className="w-full text-left px-2 py-1 hover:bg-[#316ac5] hover:text-white rounded-sm"
               >
                 Fibonacci Retracement (F)
+              </button>
+              <button
+                onClick={() => {
+                  onSelectDrawingTool('fixed_range_vp');
+                  setOpenMenu(null);
+                }}
+                className="w-full text-left px-2 py-1 hover:bg-[#316ac5] hover:text-white rounded-sm"
+              >
+                Fixed Range Volume Profile (P)
               </button>
               <button
                 onClick={() => {

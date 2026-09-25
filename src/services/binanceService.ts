@@ -271,6 +271,7 @@ export class BinanceService {
           const low = parseFloat(item[3]);
           const close = parseFloat(item[4]);
           const volume = parseFloat(item[5]);
+          const takerBuy = parseFloat(String(item[9])); // taker buy base volume
 
           if (
             !Number.isFinite(open) || open <= 0 ||
@@ -288,6 +289,9 @@ export class BinanceService {
             low: Math.max(0.01, Math.min(open, close, low)),
             close,
             volume: Number.isFinite(volume) && volume >= 0 ? volume : 0,
+            ...(Number.isFinite(takerBuy) && takerBuy >= 0 && takerBuy <= volume
+              ? { buyVolume: takerBuy, sellVolume: volume - takerBuy }
+              : {}),
           };
         })
         .filter((c): c is Candle => c !== null);

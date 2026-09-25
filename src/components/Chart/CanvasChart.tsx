@@ -66,6 +66,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Volume profile is recomputed only when its inputs change, not on every hover redraw
   const vpCacheRef = useRef<{ key: string; profile: VolumeProfile | null }>({ key: '', profile: null });
+  // Fixed-range profiles, one per drawing id
+  const frvpCacheRef = useRef<Map<string, { key: string; profile: VolumeProfile | null }>>(new Map());
 
   // Viewport bounds
   const [viewport, setViewport] = useState<{
@@ -112,7 +114,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
   // Selected drawing & active draft state
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [activeDraft, setActiveDraft] = useState<{
-    type: 'box' | 'trendline' | 'fibonacci';
+    type: 'box' | 'trendline' | 'fibonacci' | 'fixed_range_vp';
     time1: number;
     price1: number;
     time2: number;
@@ -145,7 +147,11 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
     return settings.indicators.bollinger.enabled ? IndicatorEngine.calculateBollingerBands(candles, 20, 2) : [];
   }, [candles, settings.indicators.bollinger.enabled]);
 
-  // Keyboard shortcuts (Del, Esc, Ctrl+Z, V, T, H, B, F, N, M)
+  const cvdData = useMemo(() => {
+    return settings.indicators.cvd?.enabled ? IndicatorEngine.calculateCVD(candles) : [];
+  }, [candles, settings.indicators.cvd?.enabled]);
+
+  // Keyboard shortcuts (Del, Esc, Ctrl+Z, V, T, H, B, F, N, P, M)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -177,6 +183,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         onSelectDrawingTool?.('fibonacci');
       } else if (e.key.toLowerCase() === 'n') {
         onSelectDrawingTool?.('text');
+      } else if (e.key.toLowerCase() === 'p') {
+        onSelectDrawingTool?.('fixed_range_vp');
       } else if (e.key.toLowerCase() === 'm') {
         onToggleMeasureTool?.();
       }
@@ -188,7 +196,9 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
 
   // Layout metrics
   const RIGHT_MARGIN = 85; // Price scale + Bookmap Depth profile
-  const BOTTOM_MARGIN = 28; // Time scale
+  const TIME_AXIS_H = 28; // Time scale
+  const CVD_PANE_H = 96; // CVD sub-pane below the time scale
+  const BOTTOM_MARGIN = TIME_AXIS_H + (settings.indicators.cvd?.enabled ? CVD_PANE_H : 0);
   const tfSec = useMemo(() => timeframeToSeconds(timeframe), [timeframe]);
 
   // Price & time history for step lines
@@ -295,7 +305,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
     const yToPrice = (y: number) => vp.minPrice + ((chartH - y) / chartH) * priceSpan;
 
     return { timeToX, xToTime, priceToY, yToPrice, chartW, chartH, timeSpan, priceSpan };
-  }, []);
+  }, [BOTTOM_MARGIN]);
 
   // Main Render Loop
   useEffect(() => {
@@ -305,6 +315,118 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
     if (!ctx) return;
 
     let animId: number;
+
+    // CVD line + per-candle delta bars, scaled to the visible time range
+    const drawCvdPane = (
+      c: CanvasRenderingContext2D,
+      chartW: number,
+      top: number,
+      paneH: number,
+      timeToX: (t: number) => number
+    ) => {
+      if (!viewport || paneH < 20) return;
+      const pad = 8;
+      const innerTop = top + pad;
+      const innerH = paneH - pad * 2;
+      const visible = cvdData.filter((pt) => pt.time >= viewport.minTime - tfSec && pt.time <= viewport.maxTime + tfSec);
+      if (visible.length < 2) return;
+
+      let lo = Infinity;
+      let hi = -Infinity;
+      let maxAbsDelta = 0;
+      for (const pt of visible) {
+        lo = Math.min(lo, pt.value);
+        hi = Math.max(hi, pt.value);
+        maxAbsDelta = Math.max(maxAbsDelta, Math.abs(pt.delta));
+      }
+      if (hi - lo < 1e-9) {
+        hi += 1;
+        lo -= 1;
+      }
+      const valToY = (v: number) => innerTop + innerH - ((v - lo) / (hi - lo)) * innerH;
+      const color = settings.indicators.cvd.color || '#38bdf8';
+
+      c.save();
+      c.fillStyle = 'rgba(8, 11, 17, 0.55)';
+      c.fillRect(0, top, chartW, paneH);
+      c.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+      c.lineWidth = 1;
+      c.beginPath();
+      c.moveTo(0, top + 0.5);
+      c.lineTo(chartW + RIGHT_MARGIN, top + 0.5);
+      c.stroke();
+
+      c.beginPath();
+      c.rect(0, top, chartW, paneH);
+      c.clip();
+
+      // Per-candle delta bars around the pane's midline
+      const midY = innerTop + innerH / 2;
+      const barW = Math.max(1, Math.min(12, (chartW / (viewport.maxTime - viewport.minTime)) * tfSec * 0.7));
+      if (maxAbsDelta > 0) {
+        for (const pt of visible) {
+          const h = (Math.abs(pt.delta) / maxAbsDelta) * (innerH / 2);
+          const x = timeToX(pt.time);
+          c.fillStyle = pt.delta >= 0
+            ? `rgba(34, 197, 94, ${pt.estimated ? 0.15 : 0.3})`
+            : `rgba(239, 68, 68, ${pt.estimated ? 0.15 : 0.3})`;
+          c.fillRect(x - barW / 2, pt.delta >= 0 ? midY - h : midY, barW, h);
+        }
+      }
+
+      // Zero line if in range
+      if (lo < 0 && hi > 0) {
+        const zy = valToY(0);
+        c.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+        c.setLineDash([2, 3]);
+        c.beginPath();
+        c.moveTo(0, zy);
+        c.lineTo(chartW, zy);
+        c.stroke();
+        c.setLineDash([]);
+      }
+
+      c.strokeStyle = color;
+      c.lineWidth = 1.6;
+      c.beginPath();
+      visible.forEach((pt, i) => {
+        const x = timeToX(pt.time);
+        const y = valToY(pt.value);
+        if (i === 0) c.moveTo(x, y);
+        else c.lineTo(x, y);
+      });
+      c.stroke();
+      c.restore();
+
+      // Labels: title + change over the visible range, and last value on the right scale
+      const first = visible[0].value;
+      const last = visible[visible.length - 1].value;
+      const fmt = (v: number) => {
+        const a = Math.abs(v);
+        const s = a >= 1_000_000 ? `${(a / 1_000_000).toFixed(2)}M` : a >= 1000 ? `${(a / 1000).toFixed(1)}k` : a.toFixed(1);
+        return `${v < 0 ? '-' : v > 0 ? '+' : ''}${s}`;
+      };
+      c.save();
+      c.font = 'bold 9px "JetBrains Mono", monospace';
+      c.textAlign = 'left';
+      c.textBaseline = 'top';
+      c.fillStyle = color;
+      c.fillText(`CVD ${fmt(last)}`, 6, top + 4);
+      c.fillStyle = last - first >= 0 ? '#22c55e' : '#ef4444';
+      c.fillText(`Δ view ${fmt(last - first)}`, 90, top + 4);
+      if (visible.some((pt) => pt.estimated)) {
+        c.fillStyle = 'rgba(203, 213, 225, 0.6)';
+        c.font = '9px "JetBrains Mono", monospace';
+        c.fillText('faded bars = est. (no taker split)', 200, top + 4);
+      }
+      const ly = Math.max(top + 8, Math.min(top + paneH - 8, valToY(last)));
+      c.fillStyle = color;
+      c.fillRect(chartW + 2, ly - 7, RIGHT_MARGIN - 4, 14);
+      c.fillStyle = '#0b1220';
+      c.textBaseline = 'middle';
+      c.fillText(fmt(last), chartW + 5, ly);
+      c.restore();
+    };
 
     const render = () => {
       let saved = false;
@@ -846,6 +968,142 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
               ctx.font = '9px "JetBrains Mono", monospace';
               ctx.fillText(`${(fib.level * 100).toFixed(1)}% ($${fibPrice.toFixed(2)})`, x1 + 4, y - 2);
             });
+          } else if (d.type === 'fixed_range_vp' && d.time2 !== undefined) {
+            const t0 = Math.min(d.time1, d.time2);
+            const t1 = Math.max(d.time1, d.time2);
+            const xa = timeToX(t0);
+            const xb = timeToX(t1);
+            if (xb < 0 || xa > chartW) continue;
+
+            const trades = liquidityEngine ? liquidityEngine.getTradeHistory() : [];
+            const pricePerPx = (viewport.maxPrice - viewport.minPrice) / Math.max(1, chartH);
+            const binSize = pickBinSize(pricePerPx, 3, 0.01);
+            const lastC = candles[candles.length - 1];
+            const lastT = trades[trades.length - 1];
+            // Ranges that end before the latest candle only change when the data window shifts
+            const live = !lastC || t1 >= lastC.time;
+            const key = [
+              t0, t1, binSize, tfSec, candles.length,
+              live && lastC ? `${lastC.time}:${lastC.volume}` : '',
+              trades.length > 0 ? trades[0].time : 0,
+              live ? trades.length : 0,
+              live && lastT ? lastT.time : 0,
+            ].join('|');
+            let cached = frvpCacheRef.current.get(d.id);
+            if (!cached || cached.key !== key) {
+              cached = { key, profile: computeVolumeProfile(candles, trades as RawTrade[], t0, t1, tfSec, binSize) };
+              frvpCacheRef.current.set(d.id, cached);
+            }
+            const vp = cached.profile;
+            const rangeW = Math.max(2, xb - xa);
+
+            if (!vp || vp.maxTotal <= 0) {
+              ctx.strokeStyle = d.color;
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 3]);
+              ctx.strokeRect(xa, 0, rangeW, chartH);
+              ctx.setLineDash([]);
+              ctx.font = '9px "JetBrains Mono", monospace';
+              ctx.fillStyle = d.color;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'top';
+              ctx.fillText('FRVP: no data in range', xa + 4, 4);
+              continue;
+            }
+
+            const topP = vp.rows[vp.rows.length - 1].price + vp.binSize;
+            const yTop = priceToY(topP);
+            const yBot = priceToY(vp.rows[0].price);
+
+            // Range frame
+            ctx.fillStyle = `${d.color}10`;
+            ctx.fillRect(xa, yTop, rangeW, yBot - yTop);
+            ctx.strokeStyle = d.color;
+            ctx.globalAlpha = isSelected ? 0.9 : 0.45;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.strokeRect(xa, yTop, rangeW, yBot - yTop);
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1;
+
+            // Histogram grows rightwards from the left edge of the range
+            const maxW = rangeW * 0.7;
+            const scale = maxW / vp.maxTotal;
+            const rowPx = Math.max(1, (vp.binSize / (viewport.maxPrice - viewport.minPrice)) * chartH);
+            const gap = rowPx >= 4 ? 1 : 0;
+            let buySum = 0;
+            let sellSum = 0;
+            for (const r of vp.rows) {
+              buySum += r.buy + r.estBuy;
+              sellSum += r.sell + r.estSell;
+              if (r.total <= 0) continue;
+              const top = r.price + vp.binSize;
+              if (top < viewport.minPrice || r.price > viewport.maxPrice) continue;
+              const ry = priceToY(top);
+              const h = Math.max(1, rowPx - gap);
+              const inVA = r.price >= vp.valPrice - 1e-9 && top <= vp.vahPrice + 1e-9;
+              const a = inVA ? 0.5 : 0.22;
+              let rx = xa;
+              const seg = (v: number, color: string) => {
+                if (v <= 0) return;
+                const w = v * scale;
+                ctx.fillStyle = color;
+                ctx.fillRect(rx, ry, w, h);
+                rx += w;
+              };
+              seg(r.buy, `rgba(34, 197, 94, ${a})`);
+              seg(r.sell, `rgba(239, 68, 68, ${a})`);
+              seg(r.estBuy, `rgba(110, 190, 140, ${a * 0.7})`);
+              seg(r.estSell, `rgba(200, 120, 120, ${a * 0.7})`);
+            }
+
+            // POC (solid) and value-area edges (dashed) across the range
+            ctx.strokeStyle = d.color;
+            ctx.lineWidth = 1.4;
+            const pocY = priceToY(vp.pocPrice);
+            ctx.beginPath();
+            ctx.moveTo(xa, pocY);
+            ctx.lineTo(xb, pocY);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 3]);
+            for (const pr of [vp.vahPrice, vp.valPrice]) {
+              const y = priceToY(pr);
+              ctx.beginPath();
+              ctx.moveTo(xa, y);
+              ctx.lineTo(xb, y);
+              ctx.stroke();
+            }
+            ctx.setLineDash([]);
+
+            ctx.font = 'bold 9px "JetBrains Mono", monospace';
+            ctx.fillStyle = d.color;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(`POC ${vp.pocPrice.toFixed(2)}`, xb - 2, pocY - 1);
+            ctx.fillText(`VAH ${vp.vahPrice.toFixed(2)}`, xb - 2, priceToY(vp.vahPrice) - 1);
+            ctx.textBaseline = 'top';
+            ctx.fillText(`VAL ${vp.valPrice.toFixed(2)}`, xb - 2, priceToY(vp.valPrice) + 1);
+
+            // Summary above the range
+            const delta = buySum - sellSum;
+            const fmt = (v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(1));
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            const summary = `FRVP  Vol ${fmt(vp.totalVolume)}  Δ ${delta >= 0 ? '+' : ''}${fmt(delta)}` +
+              (vp.tickShare < 0.999 ? `  ticks ${(vp.tickShare * 100).toFixed(0)}%` : '');
+            ctx.fillText(summary, xa + 2, Math.max(10, yTop - 2));
+
+            if (isSelected) {
+              ctx.fillStyle = '#ffffff';
+              ctx.strokeStyle = '#0055ea';
+              ctx.lineWidth = 1.5;
+              const hs = 6;
+              [[xa, pocY], [xb, pocY]].forEach(([hx, hy]) => {
+                ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
+                ctx.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
+              });
+            }
           } else if (d.type === 'text') {
             const x = timeToX(d.time1);
             const y = priceToY(d.price1);
@@ -898,6 +1156,21 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           ctx.beginPath();
           ctx.moveTo(x1, y1);
           ctx.lineTo(x2, y2);
+          ctx.stroke();
+        } else if (activeDraft.type === 'fixed_range_vp') {
+          // Only the time span matters: show it as a full-height band
+          const rx = Math.min(x1, x2);
+          const rw = Math.max(2, Math.abs(x2 - x1));
+          ctx.fillStyle = `${activeDraft.color}18`;
+          ctx.fillRect(rx, 0, rw, chartH);
+          ctx.strokeStyle = activeDraft.color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(rx, 0);
+          ctx.lineTo(rx, chartH);
+          ctx.moveTo(rx + rw, 0);
+          ctx.lineTo(rx + rw, chartH);
           ctx.stroke();
         }
         ctx.restore();
@@ -1391,6 +1664,11 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         ctx.fillText(hoverPrice.toFixed(2), chartW + 6, hoverPos.y);
       }
 
+      // 9. CVD SUB-PANE (below the time scale)
+      if (settings.indicators.cvd?.enabled && cvdData.length > 1) {
+        drawCvdPane(ctx, chartW, chartH + TIME_AXIS_H, height - chartH - TIME_AXIS_H, timeToX);
+      }
+
       } catch (err) {
         console.error('[CanvasChart Render Loop Error]:', err);
       } finally {
@@ -1430,6 +1708,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
     ema50Data,
     ema200Data,
     vwapData,
+    cvdData,
   ]);
 
   // Mouse interaction handlers (TradingView style)
@@ -1511,7 +1790,12 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           return;
         }
 
-        if (activeDrawingTool === 'box' || activeDrawingTool === 'trendline' || activeDrawingTool === 'fibonacci') {
+        if (
+          activeDrawingTool === 'box' ||
+          activeDrawingTool === 'trendline' ||
+          activeDrawingTool === 'fibonacci' ||
+          activeDrawingTool === 'fixed_range_vp'
+        ) {
           setActiveDraft({
             type: activeDrawingTool,
             time1: clickTime,
@@ -1576,6 +1860,16 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
             const minY = Math.min(y1, y2);
             const maxY = Math.max(y1, y2);
             if (y >= minY - 6 && y <= maxY + 6) {
+              clickedId = d.id;
+              break;
+            }
+          } else if (d.type === 'fixed_range_vp' && d.time2 !== undefined) {
+            const xa = Math.min(transforms.timeToX(d.time1), transforms.timeToX(d.time2));
+            const xb = Math.max(transforms.timeToX(d.time1), transforms.timeToX(d.time2));
+            const prof = frvpCacheRef.current.get(d.id)?.profile;
+            const yTop = prof ? transforms.priceToY(prof.rows[prof.rows.length - 1].price + prof.binSize) : 0;
+            const yBot = prof ? transforms.priceToY(prof.rows[0].price) : chartH;
+            if (x >= xa - 4 && x <= xb + 4 && y >= yTop - 6 && y <= yBot + 6) {
               clickedId = d.id;
               break;
             }
@@ -1757,7 +2051,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
     if (activeDraft) {
       const timeDiff = Math.abs(activeDraft.time2 - activeDraft.time1);
       const priceDiff = Math.abs(activeDraft.price2 - activeDraft.price1);
-      if (timeDiff > 0.1 || priceDiff > 0.01) {
+      if (activeDraft.type === 'fixed_range_vp' ? timeDiff >= tfSec : timeDiff > 0.1 || priceDiff > 0.01) {
         const newDrawing: DrawingItem = {
           id: `d_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           type: activeDraft.type,
