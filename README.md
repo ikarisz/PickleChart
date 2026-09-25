@@ -74,6 +74,8 @@
 
 ## 🚀 Quick Start
 
+> 🇹🇭 **ไม่เคยเขียนโค้ด?** อ่าน [คู่มือติดตั้งฉบับภาษาไทยสำหรับมือใหม่ (ใช้ AI ฟรีอย่าง Antigravity)](INSTALL_TH.md)
+
 ### Prerequisites
 - [Node.js](https://nodejs.org/) (v18.0.0 or higher recommended)
 - [npm](https://www.npmjs.com/) or [pnpm](https://pnpm.io/)

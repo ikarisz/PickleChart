@@ -432,6 +432,7 @@ export function App() {
             volumeProfile: settings.indicators.volumeProfile.enabled,
           }}
           onResetView={handleResetView}
+          onSelectSymbol={handleSelectSymbol}
         />
 
         {/* PickleChart Terminal Header */}

@@ -25,6 +25,8 @@ interface XPTitleBarProps {
     volumeProfile: boolean;
   };
   onResetView: () => void;
+  onOpenLandingPage?: () => void;
+  onSelectSymbol?: (symbol: MarketSymbol) => void;
 }
 
 export const XPTitleBar: React.FC<XPTitleBarProps> = ({
@@ -35,8 +37,10 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
   onQuickToggleIndicator,
   activeIndicators,
   onResetView,
+  onOpenLandingPage,
+  onSelectSymbol,
 }) => {
-  type ActiveMenu = 'file' | 'view' | 'indicators' | 'tools' | 'help' | null;
+  type ActiveMenu = 'file' | 'asset' | 'view' | 'indicators' | 'tools' | 'help' | null;
   const [openMenu, setOpenMenu] = useState<ActiveMenu>(null);
 
   const getThemeGradient = () => {
@@ -104,7 +108,19 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
             File
           </button>
           {openMenu === 'file' && (
-            <div className="absolute top-full left-0 mt-0.5 w-48 bg-[#ece9d8] border border-[#716f64] shadow-xl p-1 z-50 text-slate-900 rounded-sm">
+            <div className="absolute top-full left-0 mt-0.5 w-52 bg-[#ece9d8] border border-[#716f64] shadow-xl p-1 z-50 text-slate-900 rounded-sm">
+              {onOpenLandingPage && (
+                <button
+                  onClick={() => {
+                    onOpenLandingPage();
+                    setOpenMenu(null);
+                  }}
+                  className="w-full text-left px-2 py-1 hover:bg-[#316ac5] hover:text-white rounded-sm flex items-center gap-2 font-bold text-emerald-800"
+                >
+                  <span>🥒</span>
+                  <span>Welcome / Showcase</span>
+                </button>
+              )}
               <button
                 onClick={() => {
                   onOpenSettings();
@@ -128,6 +144,52 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
             </div>
           )}
         </div>
+
+        {/* ASSET MENU */}
+        {onSelectSymbol && (
+          <div className="relative">
+            <button
+              onClick={() => setOpenMenu(openMenu === 'asset' ? null : 'asset')}
+              className={`px-2 py-0.5 rounded hover:bg-[#dfdbcc] ${openMenu === 'asset' ? 'bg-[#b6c6de] font-semibold' : ''}`}
+            >
+              Asset
+            </button>
+            {openMenu === 'asset' && (
+              <div className="absolute top-full left-0 mt-0.5 w-64 bg-[#ece9d8] border border-[#716f64] shadow-xl p-1 z-50 text-slate-900 rounded-sm font-sans">
+                <div className="text-[10px] font-bold text-slate-600 px-2 py-1 uppercase border-b border-[#aca899] mb-1 flex items-center justify-between">
+                  <span>Switch Asset</span>
+                  <span className="font-mono text-[9px] text-blue-700 font-bold">{symbol}</span>
+                </div>
+                {([
+                  { sym: 'XAUUSDT', name: 'Gold Spot Perpetual' },
+                  { sym: 'BTCUSDT', name: 'Bitcoin Perpetual' },
+                  { sym: 'QQQUSDT', name: 'Invesco QQQ NASDAQ 100' },
+                  { sym: 'SPYUSDT', name: 'SPDR S&P 500 ETF' },
+                ] as const).map(({ sym, name }) => {
+                  const isCurrent = symbol === sym;
+                  return (
+                    <button
+                      key={sym}
+                      onClick={() => {
+                        onSelectSymbol(sym as MarketSymbol);
+                        setOpenMenu(null);
+                      }}
+                      className={`w-full text-left px-2 py-1.5 hover:bg-[#316ac5] hover:text-white rounded-sm flex items-center justify-between text-xs transition-colors ${
+                        isCurrent ? 'bg-[#316ac5] text-white font-bold' : 'text-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold">{sym}</span>
+                        <span className="text-[10px] opacity-80 truncate max-w-[130px]">({name})</span>
+                      </div>
+                      {isCurrent && <span className="font-bold text-xs ml-1">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* VIEW MENU */}
         <div className="relative">
@@ -282,6 +344,18 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
           <Sliders className="w-3 h-3 text-amber-700" />
           <span>Chart Properties...</span>
         </button>
+
+        {/* WELCOME / SHOWCASE BUTTON */}
+        {onOpenLandingPage && (
+          <button
+            onClick={onOpenLandingPage}
+            className="px-2 py-0.5 rounded hover:bg-[#dfdbcc] font-semibold text-emerald-800 flex items-center gap-1 ml-auto"
+            title="Return to Welcome & Showcase Page"
+          >
+            <span>🥒</span>
+            <span>Welcome / Showcase</span>
+          </button>
+        )}
       </div>
 
       {/* Backdrop to close menus on outside click */}
