@@ -735,6 +735,39 @@ export const ChartSettingsModal: React.FC<ChartSettingsModalProps> = ({
                     className="w-7 h-6 rounded cursor-pointer border"
                   />
                 </div>
+                {/* Volume Profile */}
+                <div className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded border">
+                  <label className="flex items-center gap-2 cursor-pointer font-medium">
+                    <input
+                      type="checkbox"
+                      checked={localSettings.indicators.volumeProfile.enabled}
+                      onChange={(e) =>
+                        setLocalSettings((p) => ({
+                          ...p,
+                          indicators: {
+                            ...p.indicators,
+                            volumeProfile: { ...p.indicators.volumeProfile, enabled: e.target.checked },
+                          },
+                        }))
+                      }
+                    />
+                    <span>Volume Profile (Visible Range, POC / VA 70%)</span>
+                  </label>
+                  <input
+                    type="color"
+                    value={localSettings.indicators.volumeProfile.color}
+                    onChange={(e) =>
+                      setLocalSettings((p) => ({
+                        ...p,
+                        indicators: {
+                          ...p.indicators,
+                          volumeProfile: { ...p.indicators.volumeProfile, color: e.target.value },
+                        },
+                      }))
+                    }
+                    className="w-7 h-6 rounded cursor-pointer border"
+                  />
+                </div>
               </fieldset>
             </div>
           )}

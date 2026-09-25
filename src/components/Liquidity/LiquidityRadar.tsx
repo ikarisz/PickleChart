@@ -200,7 +200,11 @@ export const LiquidityRadar: React.FC<LiquidityRadarProps> = ({
                     key={ev.id}
                     onClick={() => onPriceSelect && onPriceSelect(ev.price)}
                     className={`p-2 cursor-pointer transition-colors space-y-1 ${
-                      isEven ? 'bg-white hover:bg-[#e8f0fe]' : 'bg-[#f8f9fa] hover:bg-[#e8f0fe]'
+                      ev.significant
+                        ? 'bg-[#fffbeb] hover:bg-[#fef3c7] border-l-4 border-[#f59e0b]'
+                        : isEven
+                          ? 'bg-white hover:bg-[#e8f0fe]'
+                          : 'bg-[#f8f9fa] hover:bg-[#e8f0fe]'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -215,6 +219,9 @@ export const LiquidityRadar: React.FC<LiquidityRadarProps> = ({
                           {isBuySwept ? 'BUY SWEEP' : 'SELL SWEEP'}
                         </span>
                         <span className="font-bold text-slate-900 font-mono text-[11px]">${ev.price.toFixed(2)}</span>
+                        {ev.significant && (
+                          <span className="px-1 rounded-[1px] text-[9px] font-bold bg-[#f59e0b] text-[#1c1508]">★ KEY ABSORB</span>
+                        )}
                       </div>
                       <span className="text-[9px] text-slate-500 font-mono flex items-center gap-1">
                         <Clock className="w-2.5 h-2.5" />
@@ -231,16 +238,31 @@ export const LiquidityRadar: React.FC<LiquidityRadarProps> = ({
                       </span>
                     </div>
 
+                    {ev.significant && ev.significanceTags && ev.significanceTags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 text-[9px] font-mono">
+                        {ev.significanceTags.map((t) => (
+                          <span key={t} className="px-1 rounded-[1px] bg-[#fef3c7] text-[#92400e] border border-[#fde68a]">{t}</span>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Market Reaction badge */}
                     <div className="flex items-center justify-between text-[9px] pt-1 border-t border-[#f0eee4]">
                       <span className="text-slate-500 font-sans">Reaction:</span>
                       {ev.reaction === 'absorbed_reversal' ? (
                         <span className="px-1.5 py-0.2 rounded-[1px] bg-[#fef3c7] text-[#92400e] font-semibold border border-[#fde68a]">
-                          🛡️ Absorbed & Reversal
+                          🛡️ Absorbed & Reversal {isBuySwept ? '↓' : '↑'}
                         </span>
                       ) : ev.reaction === 'breakout_continuation' ? (
                         <span className="px-1.5 py-0.2 rounded-[1px] bg-[#e0f2fe] text-[#0369a1] font-semibold border border-[#bae6fd]">
-                          🚀 Breakout & Continued
+                          🚀 Breakout {isBuySwept ? '↑' : '↓'}
+                        </span>
+                      ) : ev.reaction === 'stalled' ? (
+                        <span
+                          className="px-1.5 py-0.2 rounded-[1px] bg-[#f1f5f9] text-[#475569] font-semibold border border-[#cbd5e1]"
+                          title="No ±0.5 pt move either way within 30s of the sweep"
+                        >
+                          ⏸ Stalled
                         </span>
                       ) : (
                         <span className="text-slate-400 italic">Analyzing reaction...</span>
@@ -390,14 +412,23 @@ export const LiquidityRadar: React.FC<LiquidityRadarProps> = ({
                     <div className="flex items-center justify-between text-[10px] font-mono">
                       <span className="text-slate-500 font-sans text-[9px]">{pool.description}</span>
                       <span className="font-semibold text-slate-800">
-                        ~{pool.estimatedVolume.toFixed(1)} XAU Stop Pool
+                        Swing vol ~{pool.estimatedVolume.toFixed(1)} XAU
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono pt-0.5">
                       <span>Distance: {pool.distance.toFixed(2)} pts</span>
-                      {pool.sweptVolume && (
-                        <span className="text-[#008000] font-bold">Swept: {pool.sweptVolume.toFixed(1)} XAU</span>
+                      {pool.sweptVolume !== undefined && (
+                        <span
+                          className="text-[#008000] font-bold"
+                          title={
+                            pool.sweptVolumeSource === 'candle'
+                              ? 'No tick data for the sweep bar: whole-bar volume shown (upper bound)'
+                              : 'Volume traded beyond the level during the sweep bar'
+                          }
+                        >
+                          Vol beyond: {pool.sweptVolume.toFixed(1)} XAU{pool.sweptVolumeSource === 'candle' ? ' (bar)' : ''}
+                        </span>
                       )}
                     </div>
                   </div>

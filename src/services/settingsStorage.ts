@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: ChartAppearanceSettings = {
     ema200: { enabled: false, color: '#ec4899' },
     vwap: { enabled: true, color: '#fbbf24' },
     bollinger: { enabled: false, color: '#06b6d4' },
+    volumeProfile: { enabled: true, color: '#fbbf24' },
   },
 };
 

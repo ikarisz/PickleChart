@@ -14,7 +14,7 @@ interface XPTitleBarProps {
   xpTheme: XPThemeStyle;
   onOpenSettings: () => void;
   onSelectDrawingTool: (tool: DrawingToolType) => void;
-  onQuickToggleIndicator: (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger') => void;
+  onQuickToggleIndicator: (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile') => void;
   activeIndicators: {
     ema9: boolean;
     ema21: boolean;
@@ -22,6 +22,7 @@ interface XPTitleBarProps {
     ema200: boolean;
     vwap: boolean;
     bollinger: boolean;
+    volumeProfile: boolean;
   };
   onResetView: () => void;
 }
@@ -202,6 +203,13 @@ export const XPTitleBar: React.FC<XPTitleBarProps> = ({
               >
                 <span>Bollinger Bands (20, 2)</span>
                 <span>{activeIndicators.bollinger ? '✓' : ''}</span>
+              </button>
+              <button
+                onClick={() => onQuickToggleIndicator('volumeProfile')}
+                className="w-full text-left px-2 py-1 hover:bg-[#316ac5] hover:text-white rounded-sm flex items-center justify-between"
+              >
+                <span>Volume Profile (Visible Range)</span>
+                <span>{activeIndicators.volumeProfile ? '✓' : ''}</span>
               </button>
             </div>
           )}

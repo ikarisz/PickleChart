@@ -29,3 +29,5 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+_backups/

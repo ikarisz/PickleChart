@@ -11,6 +11,25 @@ export class LiquidityEngine {
   private currentCandles: Candle[] = [];
   private currentPrice: number = 0;
   private tickSize: number = 0.50;
+  private barMs: number = 60_000;
+  private poolRebuildKey: string = '';
+  // ~25k trades covers roughly an hour of XAUUSDT flow, enough to measure
+  // volume beyond a level for sweeps on 1m–5m bars from real ticks
+  private maxTradeHistory: number = 25_000;
+
+  // Sweep reaction evaluation: first threshold hit wins; neither within the window = stalled
+  private reactionFollowPts: number = 0.5;
+  private reactionReversePts: number = 0.5;
+  private reactionWindowMs: number = 30_000;
+  // event id -> reference price (last trade price when the sweep was recorded)
+  private reactionRef: Map<string, number> = new Map();
+
+  // Key-absorption detection
+  private recentSweepVolumes: number[] = []; // rolling, for the size percentile
+  private absorbMinVolume: number = 8; // XAU floor, whatever the percentile says
+  private absorbPercentile: number = 0.8; // single absorb must beat this share of recent sweeps
+  private stackWindowMs: number = 60_000; // absorbs at the same level within this window add up
+  private stackPriceTol: number = 0.5;
 
   // Resting limit walls
   private limitWalls: RestingLimitWall[] = [];
@@ -60,7 +79,14 @@ export class LiquidityEngine {
   }
 
   public getLiquidityPools(): LiquidityPool[] {
+    // distances change with every trade; keep the list ordered by proximity
+    this.liquidityPools.sort((a, b) => a.distance - b.distance);
     return this.liquidityPools;
+  }
+
+  // Buffered ticks (ascending by time); read-only use, e.g. for the volume profile
+  public getTradeHistory(): readonly RawTrade[] {
+    return this.tradeHistory;
   }
 
   public getSweptEvents(): SweptOrderEvent[] {
@@ -169,16 +195,30 @@ export class LiquidityEngine {
     return res;
   }
 
-  // Update historical candles & detect BSL / SSL / TP liquidity pools
-  public processCandles(candles: Candle[]) {
+  // Update historical candles & detect BSL / SSL liquidity pools.
+  // Pivot detection is O(n^2) over up to ~1500 candles, so it only re-runs when
+  // a candle closes (or when forced, e.g. after a history load). Between closes,
+  // processTrade() keeps sweep state and distances current.
+  public processCandles(candles: Candle[], force: boolean = false) {
     if (!candles || candles.length === 0) return;
     this.currentCandles = candles;
 
-    const pools: LiquidityPool[] = [];
     const len = candles.length;
-    const windowSize = 3; // pivot window: 3 candles left, 3 candles right
+    if (len >= 2) {
+      const step = (candles[len - 1].time - candles[len - 2].time) * 1000;
+      if (step > 0) this.barMs = step;
+    }
 
-    for (let i = windowSize; i < len - windowSize; i++) {
+    const key = `${len}|${candles[0].time}|${len >= 2 ? candles[len - 2].time : 0}`;
+    if (!force && key === this.poolRebuildKey) return;
+    this.poolRebuildKey = key;
+
+    const prevById = new Map(this.liquidityPools.map((p) => [p.id, p] as const));
+    const pools: LiquidityPool[] = [];
+    const windowSize = 3; // pivot window: 3 candles left, 3 closed candles right
+    const closedLen = len - 1; // last candle is still forming
+
+    for (let i = windowSize; i < closedLen - windowSize; i++) {
       const c = candles[i];
       let isHigh = true;
       let isLow = true;
@@ -191,70 +231,11 @@ export class LiquidityEngine {
 
       if (isHigh) {
         // Buy-Side Liquidity (BSL) = Short Stop Loss Pool & Breakout Buys above swing high
-        const price = Math.round(c.high * 100) / 100;
-        // Check if price already swept by later candles
-        let isSwept = false;
-        let sweptTime = 0;
-        let maxVolumeAtSweep = 0;
-
-        for (let k = i + 1; k < len; k++) {
-          if (candles[k].high > price) {
-            isSwept = true;
-            sweptTime = candles[k].time * 1000;
-            maxVolumeAtSweep = candles[k].volume;
-            break;
-          }
-        }
-
-        const distance = Math.abs(price - this.currentPrice);
-        // Estimate stop pool size based on the swing candle volume & duration
-        const estimatedVol = Math.round(c.volume * 1.5 * 10) / 10;
-
-        pools.push({
-          id: `BSL-${price}-${c.time}`,
-          price,
-          type: 'BSL',
-          description: isSwept ? 'Buy-Side Liquidity (SWEPT)' : 'BSL (Short SL Pool / Breakout)',
-          time: c.time * 1000,
-          estimatedVolume: Math.max(10, estimatedVol),
-          isSwept,
-          sweptAtTime: isSwept ? sweptTime : undefined,
-          sweptVolume: isSwept ? maxVolumeAtSweep : undefined,
-          distance,
-        });
+        pools.push(this.buildPool('BSL', c, candles, i, prevById));
       }
-
       if (isLow) {
         // Sell-Side Liquidity (SSL) = Long Stop Loss Pool & Breakdown Sells below swing low
-        const price = Math.round(c.low * 100) / 100;
-        let isSwept = false;
-        let sweptTime = 0;
-        let maxVolumeAtSweep = 0;
-
-        for (let k = i + 1; k < len; k++) {
-          if (candles[k].low < price) {
-            isSwept = true;
-            sweptTime = candles[k].time * 1000;
-            maxVolumeAtSweep = candles[k].volume;
-            break;
-          }
-        }
-
-        const distance = Math.abs(this.currentPrice - price);
-        const estimatedVol = Math.round(c.volume * 1.5 * 10) / 10;
-
-        pools.push({
-          id: `SSL-${price}-${c.time}`,
-          price,
-          type: 'SSL',
-          description: isSwept ? 'Sell-Side Liquidity (SWEPT)' : 'SSL (Long SL Pool / Breakdown)',
-          time: c.time * 1000,
-          estimatedVolume: Math.max(10, estimatedVol),
-          isSwept,
-          sweptAtTime: isSwept ? sweptTime : undefined,
-          sweptVolume: isSwept ? maxVolumeAtSweep : undefined,
-          distance,
-        });
+        pools.push(this.buildPool('SSL', c, candles, i, prevById));
       }
     }
 
@@ -273,6 +254,80 @@ export class LiquidityEngine {
       .slice(0, 25);
   }
 
+  private buildPool(
+    type: 'BSL' | 'SSL',
+    c: Candle,
+    candles: Candle[],
+    i: number,
+    prevById: Map<string, LiquidityPool>
+  ): LiquidityPool {
+    const price = Math.round((type === 'BSL' ? c.high : c.low) * 100) / 100;
+    const id = `${type}-${price}-${c.time}`;
+    const beyond = (x: number) => (type === 'BSL' ? x > price : x < price);
+
+    let isSwept = false;
+    let sweptAtTime: number | undefined;
+    let sweptVolume: number | undefined;
+    let sweptVolumeSource: LiquidityPool['sweptVolumeSource'];
+
+    for (let k = i + 1; k < candles.length; k++) {
+      if (beyond(type === 'BSL' ? candles[k].high : candles[k].low)) {
+        isSwept = true;
+        sweptAtTime = candles[k].time * 1000;
+        const fromTrades = this.volumeBeyond(price, type, sweptAtTime, sweptAtTime + this.barMs);
+        if (fromTrades !== null) {
+          sweptVolume = fromTrades;
+          sweptVolumeSource = 'trades';
+        } else {
+          // No tick data for that bar: fall back to the whole bar's volume (upper bound)
+          sweptVolume = candles[k].volume;
+          sweptVolumeSource = 'candle';
+        }
+        break;
+      }
+    }
+
+    // Keep a sweep that live trades detected but candles don't reflect yet
+    const prev = prevById.get(id);
+    if (!isSwept && prev?.isSwept) {
+      isSwept = true;
+      sweptAtTime = prev.sweptAtTime;
+      sweptVolume = prev.sweptVolume;
+      sweptVolumeSource = prev.sweptVolumeSource;
+    }
+
+    const label = type === 'BSL' ? 'BSL (Short SL Pool / Breakout)' : 'SSL (Long SL Pool / Breakdown)';
+    const sweptLabel = type === 'BSL' ? 'Buy-Side Liquidity (SWEPT)' : 'Sell-Side Liquidity (SWEPT)';
+
+    return {
+      id,
+      price,
+      type,
+      description: isSwept ? sweptLabel : label,
+      time: c.time * 1000,
+      // Volume of the swing bar itself — a proxy for interest at the level, not a measured stop size
+      estimatedVolume: Math.round(c.volume * 10) / 10,
+      isSwept,
+      sweptAtTime: isSwept ? sweptAtTime : undefined,
+      sweptVolume: isSwept && sweptVolume !== undefined ? Math.round(sweptVolume * 10) / 10 : undefined,
+      sweptVolumeSource: isSwept ? sweptVolumeSource : undefined,
+      distance: this.currentPrice > 0 ? Math.abs(price - this.currentPrice) : 0,
+    };
+  }
+
+  // Volume traded strictly beyond `price` within [from, to). Returns null when
+  // the trade buffer does not cover the start of that window.
+  private volumeBeyond(price: number, type: 'BSL' | 'SSL', from: number, to: number): number | null {
+    const h = this.tradeHistory;
+    if (h.length === 0 || h[0].time > from) return null;
+    let vol = 0;
+    for (const t of h) {
+      if (t.time < from || t.time >= to) continue;
+      if (type === 'BSL' ? t.price > price : t.price < price) vol += t.qty;
+    }
+    return vol;
+  }
+
   // Feed live incoming trades to detect execution & order sweep events
   public processTrade(trade: RawTrade) {
     if (!trade || !Number.isFinite(trade.price) || trade.price <= 0 || !Number.isFinite(trade.qty) || trade.qty <= 0) {
@@ -281,23 +336,33 @@ export class LiquidityEngine {
 
     this.currentPrice = trade.price;
     this.tradeHistory.push(trade);
-    if (this.tradeHistory.length > 3000) {
-      this.tradeHistory.shift();
+    // Trim in chunks: shift() on a 25k array per trade would be O(n) each time
+    if (this.tradeHistory.length > this.maxTradeHistory + 1000) {
+      this.tradeHistory.splice(0, this.tradeHistory.length - this.maxTradeHistory);
     }
 
-    // Check if trade interacted with any active Liquidity Pools (BSL or SSL)
+    this.evaluateReactions(trade);
+
+    // A pool is swept only when price trades strictly beyond it (not a touch),
+    // after the swing bar has closed. Volume counts only trades beyond the level
+    // within the bar in which the sweep happened.
     const bucket = Math.round(trade.price * 2) / 2;
 
-    // Check pools within 0.50 points
     for (const pool of this.liquidityPools) {
-      if (Math.abs(trade.price - pool.price) <= 0.35) {
-        if (!pool.isSwept) {
-          pool.isSwept = true;
-          pool.sweptAtTime = trade.time;
-          pool.sweptVolume = (pool.sweptVolume || 0) + trade.qty;
-          pool.description = `${pool.type} (SWEPT)`;
-        } else {
-          pool.sweptVolume = (pool.sweptVolume || 0) + trade.qty;
+      pool.distance = Math.abs(trade.price - pool.price);
+      const isBeyond = pool.type === 'BSL' ? trade.price > pool.price : trade.price < pool.price;
+      if (!isBeyond || trade.time < pool.time + this.barMs) continue;
+
+      if (!pool.isSwept) {
+        pool.isSwept = true;
+        pool.sweptAtTime = trade.time;
+        pool.sweptVolume = trade.qty;
+        pool.sweptVolumeSource = 'trades';
+        pool.description = pool.type === 'BSL' ? 'Buy-Side Liquidity (SWEPT)' : 'Sell-Side Liquidity (SWEPT)';
+      } else if (pool.sweptVolumeSource === 'trades' && pool.sweptAtTime !== undefined) {
+        const barStart = Math.floor(pool.sweptAtTime / this.barMs) * this.barMs;
+        if (trade.time < barStart + this.barMs) {
+          pool.sweptVolume = Math.round(((pool.sweptVolume || 0) + trade.qty) * 10) / 10;
         }
       }
     }
@@ -358,43 +423,115 @@ export class LiquidityEngine {
         notional: Math.round(bucket * tracker.volume),
         aggressorSide,
         reaction: 'pending',
-        initialRestingVolume: matchingWall ? matchingWall.volume : matchingPool?.estimatedVolume,
-        highAfterSweep: tracker.highPrice,
-        lowAfterSweep: tracker.lowPrice,
+        initialRestingVolume: matchingWall ? matchingWall.volume : undefined,
+        highAfterSweep: trade.price,
+        lowAfterSweep: trade.price,
       };
 
       this.sweptEvents.unshift(event);
+      this.reactionRef.set(event.id, trade.price);
+      this.recentSweepVolumes.push(event.volume);
+      if (this.recentSweepVolumes.length > 200) this.recentSweepVolumes.shift();
       if (this.sweptEvents.length > this.maxSweptEvents) {
-        this.sweptEvents.pop();
+        const dropped = this.sweptEvents.pop();
+        if (dropped) this.reactionRef.delete(dropped.id);
       }
     }
   }
 
-  // Evaluate market reaction (Absorption Reversal vs Breakout Continuation)
+  // Drop sweep-cluster trackers that have gone quiet
   private finalizeOldTrackers(now: number) {
     this.activeSweepTracking.forEach((tracker, bucket) => {
       if (now - tracker.lastTime > 2500) {
-        // Find corresponding swept event to evaluate reaction
-        const evt = this.sweptEvents.find((e) => Math.abs(e.price - bucket) < 0.01 && e.reaction === 'pending');
-        if (evt) {
-          // If aggressor was BUY, but price fell back below the sweep bucket -> Absorption Reversal!
-          // If aggressor was BUY and price stayed above -> Breakout Continuation!
-          if (evt.aggressorSide === 'buy') {
-            evt.reaction = this.currentPrice < evt.price - 0.20 ? 'absorbed_reversal' : 'breakout_continuation';
-          } else {
-            // Aggressor SELL: if price rallied back above sweep bucket -> Absorption Reversal!
-            evt.reaction = this.currentPrice > evt.price + 0.20 ? 'absorbed_reversal' : 'breakout_continuation';
-          }
-        }
         this.activeSweepTracking.delete(bucket);
       }
     });
   }
 
+  // Classify each pending sweep by what price does next, measured from the
+  // sweep's reference price in the aggressor's direction:
+  //   +reactionFollowPts first  -> breakout_continuation
+  //   -reactionReversePts first -> absorbed_reversal
+  //   neither within reactionWindowMs -> stalled
+  private evaluateReactions(trade: RawTrade) {
+    for (const evt of this.sweptEvents) {
+      if (evt.reaction !== 'pending') continue;
+      const ref = this.reactionRef.get(evt.id);
+      if (ref === undefined) continue;
+      if (trade.time < evt.time) continue;
+
+      evt.highAfterSweep = Math.max(evt.highAfterSweep ?? trade.price, trade.price);
+      evt.lowAfterSweep = Math.min(evt.lowAfterSweep ?? trade.price, trade.price);
+
+      const dir = evt.aggressorSide === 'buy' ? 1 : -1;
+      const move = (trade.price - ref) * dir;
+
+      if (move >= this.reactionFollowPts) {
+        evt.reaction = 'breakout_continuation';
+      } else if (move <= -this.reactionReversePts) {
+        evt.reaction = 'absorbed_reversal';
+        this.flagSignificantAbsorption(evt);
+      } else if (trade.time - evt.time > this.reactionWindowMs) {
+        evt.reaction = 'stalled';
+      }
+      if (evt.reaction !== 'pending') this.reactionRef.delete(evt.id);
+    }
+  }
+
+  // Size threshold for a single absorption to count as "key"
+  public getAbsorbThreshold(): number {
+    const v = [...this.recentSweepVolumes].sort((a, b) => a - b);
+    const pct = v.length >= 10 ? v[Math.min(v.length - 1, Math.floor(v.length * this.absorbPercentile))] : 0;
+    return Math.max(this.absorbMinVolume, pct);
+  }
+
+  // Mark an absorbed_reversal as significant when it is large on its own, or when
+  // absorptions stack at the same level; attach context (pool / wall) as tags.
+  private flagSignificantAbsorption(evt: SweptOrderEvent) {
+    const threshold = this.getAbsorbThreshold();
+
+    const stacked = this.sweptEvents.filter(
+      (e) =>
+        e.reaction === 'absorbed_reversal' &&
+        e.aggressorSide === evt.aggressorSide &&
+        Math.abs(e.price - evt.price) <= this.stackPriceTol &&
+        Math.abs(e.time - evt.time) <= this.stackWindowMs
+    );
+    const stackVol = stacked.reduce((a, e) => a + e.volume, 0);
+
+    const big = evt.volume >= threshold;
+    const stack = stacked.length >= 2 && stackVol >= threshold * 1.5;
+    if (!big && !stack) return;
+
+    const tags: string[] = [];
+    const pool = this.liquidityPools.find((p) => Math.abs(p.price - evt.price) <= 0.5);
+    if (pool) tags.push(`${pool.type} pool`);
+    const wall = this.limitWalls.find((w) => Math.abs(w.price - evt.price) <= 0.5);
+    if (wall) tags.push(`Wall ${wall.volume.toFixed(0)} XAU`);
+    if (stack) tags.push(`×${stacked.length} stacked ${stackVol.toFixed(1)} XAU`);
+
+    evt.significant = true;
+    evt.significanceTags = tags;
+    // Only the newest event of a stack carries the stack flag, so alerts don't repeat;
+    // an earlier absorb that was big on its own keeps its flag (minus the stack tag)
+    for (const e of stacked) {
+      if (e === evt || !e.significant || !e.significanceTags?.some((t) => t.includes('stacked'))) continue;
+      if (e.volume >= threshold) {
+        e.significanceTags = e.significanceTags.filter((t) => !t.includes('stacked'));
+      } else {
+        e.significant = false;
+      }
+    }
+  }
+
   // Pre-load historical trades to backfill swept orders
   public setHistoricalTrades(trades: RawTrade[]) {
-    this.tradeHistory = trades;
+    // processTrade() appends to tradeHistory itself; start empty so the input
+    // array isn't mutated mid-iteration and trades aren't double-counted.
+    this.tradeHistory = [];
     this.sweptEvents = [];
+    this.reactionRef.clear();
+    this.activeSweepTracking.clear();
     for (const t of trades) {
       this.processTrade(t);
     }

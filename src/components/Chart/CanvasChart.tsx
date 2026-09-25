@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { BigTrade, Candle, OrderBookState, Timeframe } from '../../types/market';
+import { BigTrade, Candle, OrderBookState, RawTrade, Timeframe } from '../../types/market';
 import { LiquidityPool, RangeMeasurementResult, RestingLimitWall, SweptOrderEvent } from '../../types/liquidity';
 import { DrawingItem, DrawingToolType } from '../../types/drawing';
 import { ChartAppearanceSettings } from '../../types/settings';
@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS } from '../../services/settingsStorage';
 import { IndicatorEngine } from '../../services/indicatorEngine';
 import { LiquidityEngine } from '../../services/liquidityEngine';
 import { timeframeToSeconds } from '../../services/candleAggregator';
+import { computeVolumeProfile, pickBinSize, VolumeProfile } from '../../services/volumeProfile';
 
 import { DrawingToolbar } from './DrawingToolbar';
 
@@ -63,6 +64,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Volume profile is recomputed only when its inputs change, not on every hover redraw
+  const vpCacheRef = useRef<{ key: string; profile: VolumeProfile | null }>({ key: '', profile: null });
 
   // Viewport bounds
   const [viewport, setViewport] = useState<{
@@ -509,6 +512,113 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           }
         }
         ctx.stroke();
+      }
+
+      // 3.5 VISIBLE-RANGE VOLUME PROFILE (drawn under the candles)
+      let pocTag: { y: number; price: number; color: string } | null = null;
+      if (settings.indicators.volumeProfile?.enabled) {
+        const trades = liquidityEngine ? liquidityEngine.getTradeHistory() : [];
+        const pricePerPx = (viewport.maxPrice - viewport.minPrice) / Math.max(1, chartH);
+        const binSize = pickBinSize(pricePerPx, 3, 0.1);
+        const lastC = candles[candles.length - 1];
+        const lastT = trades[trades.length - 1];
+        const key = [
+          viewport.minTime, viewport.maxTime, binSize, tfSec, candles.length,
+          lastC ? `${lastC.time}:${lastC.volume}` : '', trades.length, lastT ? lastT.time : 0,
+        ].join('|');
+        if (vpCacheRef.current.key !== key) {
+          vpCacheRef.current = {
+            key,
+            profile: computeVolumeProfile(candles, trades as RawTrade[], viewport.minTime, viewport.maxTime, tfSec, binSize),
+          };
+        }
+        const vp = vpCacheRef.current.profile;
+
+        if (vp && vp.maxTotal > 0) {
+          ctx.save();
+          const maxW = Math.min(170, chartW * 0.22);
+          const scale = maxW / vp.maxTotal;
+          const rowPx = Math.max(1, (vp.binSize / (viewport.maxPrice - viewport.minPrice)) * chartH);
+          const gap = rowPx >= 4 ? 1 : 0;
+          const vpColor = settings.indicators.volumeProfile.color || '#fbbf24';
+
+          for (const r of vp.rows) {
+            if (r.total <= 0) continue;
+            const top = r.price + vp.binSize;
+            if (top < viewport.minPrice || r.price > viewport.maxPrice) continue;
+            const yTop = priceToY(top);
+            const h = Math.max(1, rowPx - gap);
+            const inVA = r.price >= vp.valPrice - 1e-9 && top <= vp.vahPrice + 1e-9;
+            const a = inVA ? 0.42 : 0.2;
+
+            // Stack right-to-left from the price scale: ticks first (solid), estimates after (faded)
+            let x = chartW;
+            const seg = (v: number, color: string) => {
+              if (v <= 0) return;
+              const w = v * scale;
+              x -= w;
+              ctx.fillStyle = color;
+              ctx.fillRect(x, yTop, w, h);
+            };
+            seg(r.buy, `rgba(34, 197, 94, ${a})`);
+            seg(r.sell, `rgba(239, 68, 68, ${a})`);
+            // Candle-estimated volume: same hues, lighter and desaturated
+            seg(r.estBuy, `rgba(110, 190, 140, ${a * 0.7})`);
+            seg(r.estSell, `rgba(200, 120, 120, ${a * 0.7})`);
+          }
+
+          // POC across the chart, VAH / VAL over the profile
+          const pocY = priceToY(vp.pocPrice);
+          if (pocY >= 0 && pocY <= chartH) {
+            ctx.strokeStyle = vpColor;
+            ctx.globalAlpha = 0.85;
+            ctx.lineWidth = 1.2;
+            ctx.setLineDash([6, 3]);
+            ctx.beginPath();
+            ctx.moveTo(0, pocY);
+            ctx.lineTo(chartW, pocY);
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 0.7;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 3]);
+          for (const p of [vp.vahPrice, vp.valPrice]) {
+            const y = priceToY(p);
+            if (y < 0 || y > chartH) continue;
+            ctx.beginPath();
+            ctx.moveTo(chartW - maxW, y);
+            ctx.lineTo(chartW, y);
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+
+          ctx.font = 'bold 9px "JetBrains Mono", monospace';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillStyle = vpColor;
+          const lbl = (text: string, p: number) => {
+            const y = priceToY(p);
+            if (y < 10 || y > chartH) return;
+            ctx.fillText(text, chartW - maxW - 4, y - 1);
+          };
+          // POC tag is drawn later on the right price scale (see 7.5)
+          if (pocY >= 0 && pocY <= chartH) pocTag = { y: pocY, price: vp.pocPrice, color: vpColor };
+          lbl(`VAH ${vp.vahPrice.toFixed(2)}`, vp.vahPrice);
+          ctx.textBaseline = 'top';
+          const valY = priceToY(vp.valPrice);
+          if (valY >= 0 && valY < chartH - 10) ctx.fillText(`VAL ${vp.valPrice.toFixed(2)}`, chartW - maxW - 4, valY + 1);
+
+          // Data quality note: share of the profile built from real ticks
+          if (vp.tickShare < 0.999) {
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = 'rgba(203, 213, 225, 0.75)';
+            ctx.font = '9px "JetBrains Mono", monospace';
+            ctx.fillText(`VP ticks ${(vp.tickShare * 100).toFixed(0)}% · faded = est. from candles`, chartW - 4, 4);
+          }
+          ctx.restore();
+        }
       }
 
       // 4. CANDLESTICKS (Clear, vivid bodies and crisp wicks)
@@ -1002,7 +1112,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           // Badge
           const badgeText = pool.isSwept
             ? `${pool.type} SWEPT ✓`
-            : `${pool.type}: ~${pool.estimatedVolume.toFixed(0)} XAU STOP POOL`;
+            : `${pool.type}: SWING VOL ~${pool.estimatedVolume.toFixed(0)} XAU`;
 
           ctx.font = 'bold 9px "JetBrains Mono", monospace';
           const textW = ctx.measureText(badgeText).width;
@@ -1023,9 +1133,27 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       }
 
       // 7.3 SWEPT ORDERS & ABSORPTION MARKERS ("จุดที่ออเดอร์ถูกเก็บไปแล้ว")
+      // Nearby sweeps on the same side are merged into one badge (in screen space,
+      // so grouping follows zoom): every sweep keeps its dot, but only one label
+      // per cluster is drawn, e.g. "SWEPT ✓ ×6 · 27.4 XAU".
       if (showSweptMarkers && sweptEvents.length > 0) {
         ctx.save();
         const maxSweptToDraw = Math.min(25, sweptEvents.length);
+        const CLUSTER_DX = 70; // px
+        const CLUSTER_DY = 16; // px
+
+        type SweepCluster = {
+          isBuy: boolean;
+          count: number;
+          volume: number;
+          minPrice: number;
+          maxPrice: number;
+          sumX: number;
+          anchorX: number;
+          anchorY: number; // y of the outermost price (top for buys, bottom for sells)
+        };
+        const clusters: SweepCluster[] = [];
+
         for (let sIdx = 0; sIdx < maxSweptToDraw; sIdx++) {
           const ev = sweptEvents[sIdx];
           const evTimeSec = ev.time / 1000;
@@ -1057,16 +1185,55 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           ctx.lineWidth = 1.2;
           ctx.stroke();
 
-          // Swept Badge Card
-          const badgeText = `SWEPT ✓ ${ev.volume.toFixed(1)} XAU`;
-          ctx.font = 'bold 9px "JetBrains Mono", monospace';
-          const bW = ctx.measureText(badgeText).width;
-          const bX = Math.max(4, Math.min(chartW - bW - 14, x - bW / 2));
-          const bY = isBuySweep ? y - 18 : y + 6;
+          // Merge into an existing cluster of the same side if close on screen
+          const cl = clusters.find(
+            (c) =>
+              c.isBuy === isBuySweep &&
+              Math.abs(c.sumX / c.count - x) <= CLUSTER_DX &&
+              y >= priceToY(c.maxPrice) - CLUSTER_DY &&
+              y <= priceToY(c.minPrice) + CLUSTER_DY
+          );
+          if (cl) {
+            cl.count += 1;
+            cl.volume += ev.volume;
+            cl.sumX += x;
+            cl.minPrice = Math.min(cl.minPrice, ev.price);
+            cl.maxPrice = Math.max(cl.maxPrice, ev.price);
+            cl.anchorX = Math.max(cl.anchorX, x);
+            cl.anchorY = isBuySweep ? Math.min(cl.anchorY, y) : Math.max(cl.anchorY, y);
+          } else {
+            clusters.push({
+              isBuy: isBuySweep,
+              count: 1,
+              volume: ev.volume,
+              minPrice: ev.price,
+              maxPrice: ev.price,
+              sumX: x,
+              anchorX: x,
+              anchorY: y,
+            });
+          }
+        }
 
-          ctx.fillStyle = isBuySweep ? 'rgba(6, 78, 59, 0.92)' : 'rgba(136, 19, 55, 0.92)';
+        // One badge per cluster
+        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        for (const c of clusters) {
+          const range =
+            c.count > 1 && c.maxPrice - c.minPrice > 0.001
+              ? ` @${c.minPrice.toFixed(1)}–${c.maxPrice.toFixed(1)}`
+              : '';
+          const badgeText =
+            c.count > 1
+              ? `SWEPT ✓ ×${c.count} · ${c.volume.toFixed(1)} XAU${range}`
+              : `SWEPT ✓ ${c.volume.toFixed(1)} XAU`;
+          const bW = ctx.measureText(badgeText).width;
+          const cx = c.sumX / c.count;
+          const bX = Math.max(4, Math.min(chartW - bW - 14, cx - bW / 2));
+          const bY = c.isBuy ? c.anchorY - 18 : c.anchorY + 6;
+
+          ctx.fillStyle = c.isBuy ? 'rgba(6, 78, 59, 0.92)' : 'rgba(136, 19, 55, 0.92)';
           ctx.fillRect(bX - 4, bY, bW + 8, 13);
-          ctx.strokeStyle = isBuySweep ? '#34d399' : '#fb7185';
+          ctx.strokeStyle = c.isBuy ? '#34d399' : '#fb7185';
           ctx.lineWidth = 1;
           ctx.strokeRect(bX - 4, bY, bW + 8, 13);
 
@@ -1074,6 +1241,48 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           ctx.textAlign = 'left';
           ctx.textBaseline = 'top';
           ctx.fillText(badgeText, bX, bY + 1.5);
+        }
+
+        // Key absorptions: amber ring + a level line to the right edge (kept for 30 min)
+        const nowSec = Date.now() / 1000;
+        for (const ev of sweptEvents) {
+          if (!ev.significant) continue;
+          const tSec = ev.time / 1000;
+          if (nowSec - tSec > 1800) continue;
+          if (tSec > viewport.maxTime || ev.price < viewport.minPrice || ev.price > viewport.maxPrice) continue;
+          const x = Math.max(0, timeToX(tSec));
+          const y = priceToY(ev.price);
+          const up = ev.aggressorSide === 'sell';
+
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(chartW, y);
+          ctx.stroke();
+
+          if (x > 0) {
+            ctx.beginPath();
+            ctx.arc(x, y, 9, 0, Math.PI * 2);
+            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = '#f59e0b';
+            ctx.stroke();
+          }
+
+          const txt = `🛡 ABSORB ${ev.volume.toFixed(1)} ${up ? '↑' : '↓'}`;
+          ctx.font = 'bold 9px "JetBrains Mono", monospace';
+          const w = ctx.measureText(txt).width;
+          const lx = Math.min(chartW - w - 10, Math.max(4, x + 12));
+          const ly = up ? y + 3 : y - 16;
+          ctx.fillStyle = 'rgba(28, 21, 8, 0.92)';
+          ctx.fillRect(lx - 3, ly, w + 6, 13);
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(lx - 3, ly, w + 6, 13);
+          ctx.fillStyle = '#fcd34d';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(txt, lx, ly + 1.5);
         }
         ctx.restore();
       }
@@ -1111,6 +1320,35 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(`ZONE: Δ${diffP.toFixed(2)} pts`, x1 + 8, y1 + 12);
+        ctx.restore();
+      }
+
+      // 7.5 POC TAG ON THE RIGHT PRICE SCALE (on top of other scale badges;
+      // nudged off the current-price badge so both stay readable)
+      if (pocTag) {
+        const tagH = 14;
+        let tagY = pocTag.y - tagH / 2;
+        // Best bid / ask badges on the scale are 16px tall, centred on their price
+        const occupied = [orderBook?.bestBid, orderBook?.bestAsk, currentPrice]
+          .filter((p): p is number => !!p && p > 0)
+          .map((p) => priceToY(p));
+        if (occupied.some((y) => tagY < y + 8 && tagY + tagH > y - 8)) {
+          const top = Math.min(...occupied) - 8;
+          const bottom = Math.max(...occupied) + 8;
+          tagY = pocTag.y <= (top + bottom) / 2 ? top - tagH - 2 : bottom + 2;
+        }
+        tagY = Math.max(0, Math.min(chartH - tagH, tagY));
+        ctx.save();
+        ctx.fillStyle = pocTag.color;
+        ctx.fillRect(chartW + 2, tagY, RIGHT_MARGIN - 4, tagH);
+        ctx.strokeStyle = '#111827';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(chartW + 2, tagY, RIGHT_MARGIN - 4, tagH);
+        ctx.fillStyle = '#111827';
+        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`POC ${pocTag.price.toFixed(2)}`, chartW + 5, tagY + tagH / 2 + 0.5);
         ctx.restore();
       }
 

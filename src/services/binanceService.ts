@@ -15,13 +15,19 @@ export class BinanceService {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private baseUrl = 'https://fapi.binance.com';
   private wsUrl: string;
+  // Binance Futures moved ticker/aggTrade/markPrice streams to the /market path;
+  // the legacy /stream path still serves depth + trade but never pushes @ticker.
+  private marketWs: WebSocket | null = null;
+  private marketWsUrl: string;
+  private marketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private symbol: string;
 
   constructor(callbacks: BinanceCallbacks, symbol: string = 'XAUUSDT') {
     this.callbacks = callbacks;
     this.symbol = symbol.toUpperCase();
     const sLower = this.symbol.toLowerCase();
-    this.wsUrl = `wss://fstream.binance.com/stream?streams=${sLower}@depth20@100ms/${sLower}@trade/${sLower}@ticker`;
+    this.wsUrl = `wss://fstream.binance.com/stream?streams=${sLower}@depth20@100ms/${sLower}@trade`;
+    this.marketWsUrl = `wss://fstream.binance.com/market/stream?streams=${sLower}@ticker`;
   }
 
   public connect() {
@@ -75,6 +81,53 @@ export class BinanceService {
       this.callbacks.onStatusChange('error', String(err));
       this.scheduleReconnect();
     }
+
+    if (!this.marketWs) {
+      this.connectMarket();
+    }
+  }
+
+  private connectMarket() {
+    if (this.isDestroyed) return;
+    try {
+      const ws = new WebSocket(this.marketWsUrl);
+      this.marketWs = ws;
+
+      ws.onmessage = (event) => {
+        if (this.isDestroyed) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.data && String(payload.stream).includes('@ticker')) {
+            this.handleTicker(payload.data);
+          }
+        } catch (e) {
+          console.error('Binance market WS parse error:', e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.warn('Binance market WS error:', err);
+      };
+
+      ws.onclose = () => {
+        if (this.marketWs === ws) this.marketWs = null;
+        this.scheduleMarketReconnect();
+      };
+    } catch (err) {
+      console.warn('Failed to create Binance market WS:', err);
+      this.marketWs = null;
+      this.scheduleMarketReconnect();
+    }
+  }
+
+  private scheduleMarketReconnect() {
+    if (this.isDestroyed || this.marketReconnectTimer) return;
+    this.marketReconnectTimer = setTimeout(() => {
+      this.marketReconnectTimer = null;
+      if (!this.isDestroyed && !this.marketWs) {
+        this.connectMarket();
+      }
+    }, 3000);
   }
 
   private handleDepth(data: {
@@ -244,61 +297,65 @@ export class BinanceService {
     }
   }
 
+  // Cached aggTrades history. The first call pages backwards up to `totalLimit`
+  // trades (1000 per request); later calls (e.g. timeframe switches) only fetch
+  // trades newer than the cache, to stay well inside Binance's REST weight limit.
+  private tradeCache: RawTrade[] = [];
+
   public async fetchHistoricalTrades(totalLimit: number = 3000): Promise<RawTrade[]> {
-    try {
-      // First batch: latest 1000 trades
-      const res1 = await fetch(`${this.baseUrl}/fapi/v1/aggTrades?symbol=${this.symbol}&limit=1000`);
-      if (!res1.ok) return [];
-      const batch1: Array<{ a: number; p: string; q: string; T: number; m: boolean }> = await res1.json();
-      if (batch1.length === 0) return [];
-
-      let allRaw = [...batch1];
-
-      // Second batch backwards
-      if (totalLimit > 1000 && batch1.length > 0) {
-        const firstId = batch1[0].a;
-        try {
-          const res2 = await fetch(`${this.baseUrl}/fapi/v1/aggTrades?symbol=${this.symbol}&limit=1000&fromId=${Math.max(1, firstId - 1000)}`);
-          if (res2.ok) {
-            const batch2: Array<{ a: number; p: string; q: string; T: number; m: boolean }> = await res2.json();
-            const older = batch2.filter((t) => t.a < firstId);
-            allRaw = [...older, ...allRaw];
-
-            // Third batch backwards if requested
-            if (totalLimit > 2000 && older.length > 0) {
-              const earliestId = older[0].a;
-              const res3 = await fetch(`${this.baseUrl}/fapi/v1/aggTrades?symbol=${this.symbol}&limit=1000&fromId=${Math.max(1, earliestId - 1000)}`);
-              if (res3.ok) {
-                const batch3: Array<{ a: number; p: string; q: string; T: number; m: boolean }> = await res3.json();
-                const oldest = batch3.filter((t) => t.a < earliestId);
-                allRaw = [...oldest, ...allRaw];
-              }
-            }
-          }
-        } catch {
-          // Ignore secondary batch errors, keep first batch
-        }
-      }
-
-      const validTrades: RawTrade[] = [];
-      for (const item of allRaw) {
+    type AggTrade = { a: number; p: string; q: string; T: number; m: boolean };
+    const url = (params: string) => `${this.baseUrl}/fapi/v1/aggTrades?symbol=${this.symbol}&limit=1000${params}`;
+    const toRaw = (items: AggTrade[]): RawTrade[] => {
+      const out: RawTrade[] = [];
+      for (const item of items) {
         const price = parseFloat(item.p);
         const qty = parseFloat(item.q);
-        if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(qty) || qty <= 0) {
-          continue;
-        }
-        validTrades.push({
-          id: item.a,
-          time: item.T,
-          price,
-          qty,
-          side: item.m ? 'sell' : 'buy',
-        });
+        if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(qty) || qty <= 0) continue;
+        out.push({ id: item.a, time: item.T, price, qty, side: item.m ? 'sell' : 'buy' });
       }
-      return validTrades;
+      return out;
+    };
+
+    try {
+      const cacheIsUsable =
+        this.tradeCache.length >= Math.min(totalLimit, 1000) &&
+        Date.now() - this.tradeCache[this.tradeCache.length - 1].time < 10 * 60_000;
+
+      if (cacheIsUsable) {
+        // Top up forwards from the newest cached trade
+        for (let page = 0; page < 10; page++) {
+          const lastId = Number(this.tradeCache[this.tradeCache.length - 1].id);
+          const res = await fetch(url(`&fromId=${lastId + 1}`));
+          if (!res.ok) break;
+          const batch = toRaw(await res.json());
+          if (batch.length === 0) break;
+          this.tradeCache.push(...batch);
+          if (batch.length < 1000) break;
+        }
+      } else {
+        // Cold start: latest page, then page backwards
+        const res1 = await fetch(url(''));
+        if (!res1.ok) return [];
+        let all = toRaw(await res1.json());
+        while (all.length > 0 && all.length < totalLimit) {
+          const firstId = Number(all[0].id);
+          if (firstId <= 1) break;
+          const res = await fetch(url(`&fromId=${Math.max(1, firstId - 1000)}`));
+          if (!res.ok) break;
+          const older = toRaw(await res.json()).filter((t) => Number(t.id) < firstId);
+          if (older.length === 0) break;
+          all = [...older, ...all];
+        }
+        this.tradeCache = all;
+      }
+
+      if (this.tradeCache.length > totalLimit) {
+        this.tradeCache = this.tradeCache.slice(-totalLimit);
+      }
+      return [...this.tradeCache];
     } catch (e) {
       console.warn('Failed to fetch historical trades:', e);
-      return [];
+      return [...this.tradeCache];
     }
   }
 
@@ -341,6 +398,14 @@ export class BinanceService {
     if (this.ws) {
       this.ws.close();
       this.ws = null;
+    }
+    if (this.marketReconnectTimer) {
+      clearTimeout(this.marketReconnectTimer);
+      this.marketReconnectTimer = null;
+    }
+    if (this.marketWs) {
+      this.marketWs.close();
+      this.marketWs = null;
     }
   }
 }

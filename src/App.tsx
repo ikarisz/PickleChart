@@ -19,6 +19,9 @@ import { SettingsStorage } from './services/settingsStorage';
 import { ChartAppearanceSettings, ChartPreset } from './types/settings';
 import { DrawingItem, DrawingToolType } from './types/drawing';
 
+// Historical aggTrades to preload (~1h of XAUUSDT flow); 1000 per REST page
+const HISTORY_TRADES = 20_000;
+
 export function App() {
   const [symbol, setSymbol] = useState<MarketSymbol>('XAUUSDT');
   const [broker] = useState<Broker>('binance');
@@ -55,6 +58,11 @@ export function App() {
   const [liquidityPools, setLiquidityPools] = useState<LiquidityPool[]>([]);
   const [sweptEvents, setSweptEvents] = useState<SweptOrderEvent[]>([]);
 
+  // Key-absorption alerts (live only: events after the latest history load)
+  const [absorbAlerts, setAbsorbAlerts] = useState<SweptOrderEvent[]>([]);
+  const notifiedAbsorbRef = useRef<Set<string>>(new Set());
+  const liveSinceRef = useRef<number>(Date.now());
+
   // Panel View Mode: 'split' | 'dom' | 'tape' | 'liquidity'
   const [panelView, setPanelView] = useState<'split' | 'dom' | 'tape' | 'liquidity'>('split');
 
@@ -77,6 +85,7 @@ export function App() {
   const pendingBuyVolRef = useRef<number>(0);
   const pendingSellVolRef = useRef<number>(0);
   const pendingTradeCountRef = useRef<number>(0);
+  const pendingLastPriceRef = useRef<number>(0);
   const pendingCandlesRef = useRef<Candle[]>([]);
   const hasPendingCandlesRef = useRef<boolean>(false);
   const hasPendingBigTradesRef = useRef<boolean>(false);
@@ -107,7 +116,24 @@ export function App() {
         hasPendingLiquidityRef.current = false;
         setLimitWalls([...liquidityEngine.getLimitWalls()]);
         setLiquidityPools([...liquidityEngine.getLiquidityPools()]);
-        setSweptEvents([...liquidityEngine.getSweptEvents()]);
+        const events = liquidityEngine.getSweptEvents();
+        setSweptEvents([...events]);
+
+        const fresh = events.filter(
+          (e) => e.significant && e.time >= liveSinceRef.current && !notifiedAbsorbRef.current.has(e.id)
+        );
+        if (fresh.length > 0) {
+          fresh.forEach((e) => notifiedAbsorbRef.current.add(e.id));
+          if (notifiedAbsorbRef.current.size > 500) {
+            notifiedAbsorbRef.current = new Set([...notifiedAbsorbRef.current].slice(-200));
+          }
+          setAbsorbAlerts((prev) => [...fresh, ...prev].slice(0, 3));
+          // Aggressor was selling and got absorbed -> price turned up (and vice versa)
+          audioAlertService.playAbsorptionAlert(fresh[0].aggressorSide === 'sell');
+          fresh.forEach((e) => {
+            setTimeout(() => setAbsorbAlerts((prev) => prev.filter((a) => a.id !== e.id)), 12_000);
+          });
+        }
       }
       if (pendingRecentTradesRef.current.length > 0) {
         const batch = pendingRecentTradesRef.current;
@@ -128,6 +154,25 @@ export function App() {
         const c = pendingTradeCountRef.current;
         pendingTradeCountRef.current = 0;
         setTradeCount((prev) => prev + c);
+      }
+      // Keep ticker price live from the trade stream (the @ticker stream only
+      // pushes ~1/s and may drop); recompute 24h change against the implied open.
+      if (pendingLastPriceRef.current > 0) {
+        const p = pendingLastPriceRef.current;
+        pendingLastPriceRef.current = 0;
+        setTicker((prev) => {
+          if (!prev || prev.price === p) return prev;
+          const open24h = prev.price - prev.change24h;
+          const change24h = p - open24h;
+          return {
+            ...prev,
+            price: p,
+            high24h: Math.max(prev.high24h, p),
+            low24h: Math.min(prev.low24h, p),
+            change24h,
+            changePercent24h: open24h > 0 ? (change24h / open24h) * 100 : prev.changePercent24h,
+          };
+        });
       }
     }, 50);
 
@@ -165,8 +210,8 @@ export function App() {
       let loadedTrades: RawTrade[] = [];
 
       if (isSubMinute(timeframe)) {
-        // 1. Fetch 3000 multi-batch trades (high resolution tick history)
-        const trades = await activeServiceRef.current.fetchHistoricalTrades(3000);
+        // 1. Fetch multi-batch trades (high resolution tick history)
+        const trades = await activeServiceRef.current.fetchHistoricalTrades(HISTORY_TRADES);
         loadedTrades = trades;
         const tradeCandles = CandleAggregator.aggregateTrades(trades, timeframe);
 
@@ -176,17 +221,17 @@ export function App() {
         // 3. Synthesize cleanly into uniform sub-minute candles
         loadedCandles = CandleAggregator.mergeKlinesWithSubMinute(klines1m, tradeCandles, timeframe);
 
-        const clusters = clusterEngineRef.current.setHistoricalTrades(trades);
+        const clusters = clusterEngineRef.current.setHistoricalTrades(trades.slice(-3000));
         setBigTrades([...clusters]);
-        setRecentTrades(trades.slice(0, 250));
+        setRecentTrades(trades.slice(-250).reverse()); // newest first, like live onTrade
       } else {
         // Standard timeframes: fetch up to 1500 historical candles (25 hours to 2+ weeks)
         loadedCandles = await activeServiceRef.current.fetchHistoricalKlines(timeframe, 1500);
-        const trades = await activeServiceRef.current.fetchHistoricalTrades(3000);
+        const trades = await activeServiceRef.current.fetchHistoricalTrades(HISTORY_TRADES);
         loadedTrades = trades;
-        const clusters = clusterEngineRef.current.setHistoricalTrades(trades);
+        const clusters = clusterEngineRef.current.setHistoricalTrades(trades.slice(-3000));
         setBigTrades([...clusters]);
-        setRecentTrades(trades.slice(0, 250));
+        setRecentTrades(trades.slice(-250).reverse()); // newest first, like live onTrade
       }
 
       let initialBook: OrderBookState | null = orderBook;
@@ -199,15 +244,19 @@ export function App() {
       if (loadedCandles.length > 0) {
         aggregatorRef.current?.setCandles(loadedCandles);
         setCandles([...loadedCandles]);
-        liquidityEngine.processCandles(loadedCandles);
+        liquidityEngine.processCandles(loadedCandles, true);
         if (loadedTrades.length > 0) {
           liquidityEngine.setHistoricalTrades(loadedTrades);
+          // Rebuild with tick data available so swept volume uses real trades beyond the level
+          liquidityEngine.processCandles(loadedCandles, true);
         }
         if (initialBook) {
           liquidityEngine.processOrderBook(initialBook);
         }
         hasPendingLiquidityRef.current = true;
       }
+      // Anything flagged from here on is live and may alert
+      liveSinceRef.current = Date.now();
     };
 
     loadData();
@@ -253,6 +302,7 @@ export function App() {
         pendingSellVolRef.current += trade.qty;
       }
       pendingTradeCountRef.current += 1;
+      pendingLastPriceRef.current = trade.price;
 
       // 5. Process trade in Cluster Engine -> produces 3D Big Trade Spheres (Balls)
       const bt = clusterEngineRef.current.processTrade(trade);
@@ -314,7 +364,7 @@ export function App() {
     setPresets(SettingsStorage.loadPresets());
   };
 
-  const handleQuickToggleIndicator = (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger') => {
+  const handleQuickToggleIndicator = (key: 'ema9' | 'ema21' | 'ema50' | 'ema200' | 'vwap' | 'bollinger' | 'volumeProfile') => {
     const next: ChartAppearanceSettings = {
       ...settings,
       indicators: {
@@ -379,6 +429,7 @@ export function App() {
             ema200: settings.indicators.ema200.enabled,
             vwap: settings.indicators.vwap.enabled,
             bollinger: settings.indicators.bollinger.enabled,
+            volumeProfile: settings.indicators.volumeProfile.enabled,
           }}
           onResetView={handleResetView}
         />
@@ -410,6 +461,33 @@ export function App() {
         <div className="flex-1 flex flex-row overflow-hidden w-full h-full min-h-0">
           {/* High-Performance Canvas Chart */}
           <main className="flex-1 min-w-0 h-full relative overflow-hidden bg-[#11151c]">
+            {/* Key absorption alerts */}
+            {absorbAlerts.length > 0 && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex flex-col gap-1 items-center pointer-events-none">
+                {absorbAlerts.map((a) => {
+                  const up = a.aggressorSide === 'sell';
+                  return (
+                    <div
+                      key={a.id}
+                      onClick={() => setAbsorbAlerts((prev) => prev.filter((x) => x.id !== a.id))}
+                      className="pointer-events-auto cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-[3px] border-2 border-[#f59e0b] bg-[#1c1508]/95 shadow-lg text-[11px] font-mono text-amber-100"
+                      title="Click to dismiss"
+                    >
+                      <span className="text-[13px]">🛡️</span>
+                      <span className="font-bold text-amber-300">KEY ABSORPTION</span>
+                      <span className={up ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {a.aggressorSide.toUpperCase()} {a.volume.toFixed(1)} XAU absorbed @ ${a.price.toFixed(2)} → {up ? '↑' : '↓'}
+                      </span>
+                      {a.significanceTags?.map((t) => (
+                        <span key={t} className="px-1 rounded-[2px] bg-amber-500/20 text-amber-200 text-[10px]">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <CanvasChart
               candles={candles}
               bigTrades={bigTrades}

@@ -16,6 +16,7 @@ export interface IndicatorSettings {
   ema200: IndicatorConfig;
   vwap: IndicatorConfig;
   bollinger: IndicatorConfig;
+  volumeProfile: IndicatorConfig; // visible-range volume profile (POC / VAH / VAL)
 }
 
 export interface ChartAppearanceSettings {

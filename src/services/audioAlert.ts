@@ -61,6 +61,33 @@ class AudioAlertService {
       // Audio playback might be restricted before first user interaction
     }
   }
+
+  // Key absorption: two short notes, pitched in the direction price reversed
+  public playAbsorptionAlert(reversalUp: boolean) {
+    if (this.isMuted) return;
+    try {
+      const ctx = this.getContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const notes = reversalUp ? [523.25, 783.99] : [783.99, 523.25];
+      notes.forEach((freq, i) => {
+        const t = now + i * 0.14;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0.001, t);
+        gain.gain.linearRampToValueAtTime(0.08, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.13);
+      });
+    } catch {
+      // Audio playback might be restricted before first user interaction
+    }
+  }
 }
 
 export const audioAlertService = new AudioAlertService();
